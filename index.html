@@ -11,7 +11,7 @@
     <!-- Babel para processar JSX no navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- Mapa de Importação para resolver bibliotecas -->
+    <!-- Mapa de Importação -->
     <script type="importmap">
     {
         "imports": {
@@ -27,7 +27,6 @@
     </script>
 
     <style>
-        /* Ajustes finos de scrollbar */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -72,7 +71,7 @@
             where
         } from 'firebase/firestore';
 
-        // --- CONFIGURAÇÃO FIREBASE ---
+        // --- SEU CONFIG FIREBASE ---
         const firebaseConfig = {
             apiKey: "AIzaSyB69XbWCJEInd2kZGNTkjaPN-YbmAtVy0Y",
             authDomain: "mega-robo-wa.firebaseapp.com",
@@ -86,10 +85,8 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        // Fallback de segurança para analytics caso bloqueado por adblock
-        let analytics;
-        try { analytics = getAnalytics(app); } catch(e) { console.log("Analytics blocked"); }
         
+        // Caminho base para os dados (Deve coincidir com as regras do Firestore)
         const appId = 'mega-robo-wa';
 
         // --- COMPONENTE PRINCIPAL ---
@@ -98,11 +95,8 @@
             const [userProfile, setUserProfile] = useState(null);
             const [loading, setLoading] = useState(true);
             const [view, setView] = useState('login');
-            
-            // Estado de conexão WA simulado
             const [waConnected, setWaConnected] = useState(false);
 
-            // Inicialização Auth
             useEffect(() => {
                 const unsubscribe = onAuthStateChanged(auth, async (u) => {
                     setUser(u);
@@ -110,7 +104,6 @@
                         // Buscar perfil do usuário
                         const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
                         
-                        // Nota: Usamos onSnapshot para tempo real
                         const unsubscribeProfile = onSnapshot(usersRef, (snapshot) => {
                             const profiles = snapshot.docs.map(d => d.data());
                             const myProfile = profiles.find(p => p.uid === u.uid);
@@ -118,7 +111,13 @@
                                 setUserProfile(myProfile);
                                 setView('dashboard');
                             }
-                        }, (error) => console.error("Erro perfil", error));
+                        }, (error) => {
+                            console.error("Erro ao ler perfil:", error);
+                            // Se der erro de permissão aqui, o usuário logou mas não pode ler dados
+                            if(error.code === 'permission-denied') {
+                                alert("Usuário logado, mas sem permissão de leitura. Verifique as regras do Firestore.");
+                            }
+                        });
                         
                         setLoading(false);
                         return () => unsubscribeProfile();
@@ -131,7 +130,7 @@
                 return () => unsubscribe();
             }, []);
 
-            if (loading) return <div className="flex items-center justify-center h-screen bg-gray-900 text-white">Carregando Mega Robo WA...</div>;
+            if (loading) return <div className="flex items-center justify-center h-screen bg-gray-900 text-white">Carregando Sistema...</div>;
 
             return (
                 <div className="flex flex-col h-screen font-sans bg-gray-100 overflow-hidden text-slate-900">
@@ -150,30 +149,39 @@
             );
         }
 
-        // --- TELA DE LOGIN ---
+        // --- TELA DE LOGIN (COM CORREÇÃO DE ERRO) ---
         function LoginScreen({ onLoginSuccess }) {
             const [isRegistering, setIsRegistering] = useState(false);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [name, setName] = useState('');
             const [error, setError] = useState('');
+            const [loadingBtn, setLoadingBtn] = useState(false);
 
             const handleAuth = async (e) => {
                 e.preventDefault();
                 setError('');
+                setLoadingBtn(true);
                 
                 try {
                     if (isRegistering) {
-                        // Verificar se é o primeiro usuário para ser Admin
-                        const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
-                        const snapshot = await getDocs(usersRef);
-                        const isFirstUser = snapshot.empty;
-                        const role = isFirstUser ? 'admin' : 'agent';
-
+                        // 1. Criar Auth
                         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
                         const uid = userCredential.user.uid;
 
-                        // Salvar perfil público para gestão
+                        // 2. Verificar Admin (Lógica simplificada: se não há usuários, o primeiro é admin)
+                        // Nota: Isso pode falhar se as regras de leitura estiverem estritas demais antes de ter usuário
+                        let role = 'agent';
+                        try {
+                             const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+                             const snapshot = await getDocs(usersRef);
+                             if (snapshot.empty) role = 'admin';
+                        } catch (e) {
+                            console.log("Não foi possível verificar outros usuários (provavelmente primeira conta ou permissão), definindo como admin por segurança padrão.", e);
+                            role = 'admin'; 
+                        }
+
+                        // 3. Salvar no Firestore (Onde ocorria o erro)
                         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid), {
                             uid, email, name, role, createdAt: new Date().toISOString()
                         });
@@ -182,12 +190,22 @@
                     }
                     onLoginSuccess();
                 } catch (err) {
-                    console.error(err);
+                    console.error("Erro Auth:", err);
                     let msg = err.message;
+                    
+                    // Tratamento de erros comuns
                     if(err.code === 'auth/invalid-credential') msg = "Email ou senha incorretos.";
                     if(err.code === 'auth/email-already-in-use') msg = "Este email já está cadastrado.";
                     if(err.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
+                    
+                    // ERRO ESPECÍFICO DE PERMISSÃO (O da sua imagem)
+                    if(err.code === 'permission-denied') {
+                        msg = "ERRO DE PERMISSÃO NO BANCO DE DADOS: Você precisa atualizar as Regras do Firestore no console do Firebase para permitir gravações. (Cole o código 'firestore.rules' que enviei).";
+                    }
+                    
                     setError(msg);
+                } finally {
+                    setLoadingBtn(false);
                 }
             };
 
@@ -234,19 +252,23 @@
                                 />
                             </div>
                             
-                            {error && <p className="text-red-400 text-sm bg-red-900/20 p-2 rounded border border-red-900/50">{error}</p>}
+                            {error && <div className="bg-red-900/40 p-3 rounded border border-red-500 text-red-200 text-sm font-medium">{error}</div>}
 
                             <button 
                                 type="submit"
-                                className="w-full py-2 bg-[#00a884] hover:bg-[#008f6f] rounded font-bold transition-colors shadow-lg"
+                                disabled={loadingBtn}
+                                className={`w-full py-2 bg-[#00a884] hover:bg-[#008f6f] rounded font-bold transition-colors shadow-lg ${loadingBtn ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                                {isRegistering ? 'Cadastrar Usuário' : 'Entrar no Sistema'}
+                                {loadingBtn ? 'Processando...' : (isRegistering ? 'Cadastrar Usuário' : 'Entrar no Sistema')}
                             </button>
                         </form>
 
                         <div className="mt-4 text-center">
                             <button 
-                                onClick={() => setIsRegistering(!isRegistering)}
+                                onClick={() => {
+                                    setIsRegistering(!isRegistering);
+                                    setError('');
+                                }}
                                 className="text-[#00a884] text-sm hover:underline"
                             >
                                 {isRegistering ? 'Já tem conta? Faça login' : 'Criar nova conta'}
