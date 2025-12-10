@@ -1,808 +1,835 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  MessageSquare, Users, BarChart3, Settings, Mic, 
-  Send, Paperclip, MoreVertical, Search, Plus, 
-  Trash2, Save, Play, Pause, Layout, List, 
-  Smartphone, UserCheck, Shield, Wand2, Phone,
-  FileText, Image as ImageIcon, Video, Ghost
-} from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAnalytics } from "firebase/analytics";
-import { 
-  getAuth, 
-  signInWithCustomToken, 
-  signInAnonymously, 
-  onAuthStateChanged,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  query, 
-  onSnapshot, 
-  doc, 
-  updateDoc, 
-  deleteDoc,
-  setDoc,
-  getDocs,
-  where
-} from 'firebase/firestore';
-
-// --- CONFIGURAÇÃO FIREBASE ---
-const firebaseConfig = {
-  apiKey: "AIzaSyB69XbWCJEInd2kZGNTkjaPN-YbmAtVy0Y",
-  authDomain: "mega-robo-wa.firebaseapp.com",
-  projectId: "mega-robo-wa",
-  storageBucket: "mega-robo-wa.firebasestorage.app",
-  messagingSenderId: "23835456678",
-  appId: "1:23835456678:web:690ffd9a750ab762253067",
-  measurementId: "G-R9K2L5GKP4"
-};
-
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = 'mega-robo-wa';
-
-// --- TIPOS E INTERFACES ---
-type UserRole = 'admin' | 'agent';
-
-interface UserProfile {
-  uid: string;
-  email: string;
-  role: UserRole;
-  name: string;
-  createdAt: any;
-}
-
-interface Customer {
-  id: string;
-  name: string;
-  phone: string;
-  status: 'contact' | 'negotiation' | 'closed';
-  tags: string[];
-  notes: string;
-  lastContact: any;
-  assignedTo?: string; // ID do agente
-}
-
-interface ChatbotNode {
-  id: string;
-  trigger: string;
-  response: string;
-  type: 'text' | 'buttons' | 'media';
-  options?: string[]; // Para botões
-  parentId?: string;
-}
-
-// --- COMPONENTE PRINCIPAL ---
-export default function MegaRoboWA() {
-  const [user, setUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'login' | 'dashboard'>('login');
-  
-  // Estado de conexão WA simulado
-  const [waConnected, setWaConnected] = useState(false);
-
-  // Inicialização Auth
-  useEffect(() => {
-    const initAuth = async () => {
-      // Com configuração própria, dispensamos o token de preview do ambiente
-      setLoading(false);
-    };
-    initAuth();
-
-    const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        // Buscar perfil do usuário
-        const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
-        const q = query(usersRef); // Em prod, filtrar pelo ID
-        // Nota: Em um app real, usaríamos doc(db, ..., u.uid), mas aqui simulo com query para simplificar a demo de admin
-        const unsubscribeProfile = onSnapshot(usersRef, (snapshot) => {
-          const profiles = snapshot.docs.map(d => d.data() as UserProfile);
-          const myProfile = profiles.find(p => p.uid === u.uid);
-          if (myProfile) {
-            setUserProfile(myProfile);
-            setView('dashboard');
-          }
-        }, (error) => console.error("Erro perfil", error));
-        return () => unsubscribeProfile();
-      } else {
-        setView('login');
-        setUserProfile(null);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  if (loading) return <div className="flex items-center justify-center h-screen bg-gray-900 text-white">Carregando Mega Robo WA...</div>;
-
-  return (
-    <div className="flex flex-col h-screen font-sans bg-gray-100 overflow-hidden">
-      {view === 'login' && <LoginScreen onLoginSuccess={() => setView('dashboard')} />}
-      
-      {view === 'dashboard' && user && userProfile && (
-        <Dashboard 
-          user={user} 
-          userProfile={userProfile} 
-          waConnected={waConnected}
-          setWaConnected={setWaConnected}
-          onLogout={() => auth.signOut()}
-        />
-      )}
-    </div>
-  );
-}
-
-// --- TELA DE LOGIN ---
-function LoginScreen({ onLoginSuccess }: { onLoginSuccess: () => void }) {
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [error, setError] = useState('');
-
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mega Robo WA - CRM & Automação</title>
     
-    try {
-      if (isRegistering) {
-        // Verificar se é o primeiro usuário para ser Admin
-        const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
-        const snapshot = await getDocs(usersRef);
-        const isFirstUser = snapshot.empty;
-        const role: UserRole = isFirstUser ? 'admin' : 'agent';
-
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        const uid = userCredential.user.uid;
-
-        // Salvar perfil público para gestão
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid), {
-          uid, email, name, role, createdAt: new Date().toISOString()
-        });
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
-      onLoginSuccess();
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  return (
-    <div className="flex h-full bg-[#111b21] text-white">
-      <div className="m-auto w-full max-w-md p-8 bg-[#202c33] rounded-lg shadow-xl border border-gray-700">
-        <h1 className="text-3xl font-bold text-center mb-2 text-[#00a884]">Mega Robo WA</h1>
-        <p className="text-center text-gray-400 mb-8">CRM & Automação Avançada</p>
-        
-        <form onSubmit={handleAuth} className="space-y-4">
-          {isRegistering && (
-             <div>
-             <label className="block text-sm font-medium mb-1">Nome Completo</label>
-             <input 
-               type="text" 
-               className="w-full p-2 rounded bg-[#2a3942] border border-gray-600 text-white focus:border-[#00a884] focus:outline-none"
-               value={name}
-               onChange={(e) => setName(e.target.value)}
-               required
-             />
-           </div>
-          )}
-          <div>
-            <label className="block text-sm font-medium mb-1">Email</label>
-            <input 
-              type="email" 
-              className="w-full p-2 rounded bg-[#2a3942] border border-gray-600 text-white focus:border-[#00a884] focus:outline-none"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Senha</label>
-            <input 
-              type="password" 
-              className="w-full p-2 rounded bg-[#2a3942] border border-gray-600 text-white focus:border-[#00a884] focus:outline-none"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
-          
-          {error && <p className="text-red-400 text-sm">{error}</p>}
-
-          <button 
-            type="submit"
-            className="w-full py-2 bg-[#00a884] hover:bg-[#008f6f] rounded font-bold transition-colors"
-          >
-            {isRegistering ? 'Cadastrar Usuário' : 'Entrar no Sistema'}
-          </button>
-        </form>
-
-        <div className="mt-4 text-center">
-          <button 
-            onClick={() => setIsRegistering(!isRegistering)}
-            className="text-[#00a884] text-sm hover:underline"
-          >
-            {isRegistering ? 'Já tem conta? Faça login' : 'Criar nova conta'}
-          </button>
-        </div>
-        
-        <div className="mt-8 pt-4 border-t border-gray-700 text-center text-xs text-gray-500">
-          Sistema Projetado por Marcos Rodrigo Teixeira
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// --- DASHBOARD PRINCIPAL ---
-function Dashboard({ user, userProfile, waConnected, setWaConnected, onLogout }: any) {
-  const [activeModule, setActiveModule] = useState<'crm' | 'automation' | 'media' | 'admin' | 'settings'>('crm');
-  const [showQr, setShowQr] = useState(!waConnected);
-
-  // Simulação de conexão com atraso
-  useEffect(() => {
-    if (showQr && !waConnected) {
-      const timer = setTimeout(() => {
-        setWaConnected(true);
-        setShowQr(false);
-      }, 3000); // 3 segundos para "conectar"
-      return () => clearTimeout(timer);
-    }
-  }, [showQr]);
-
-  if (showQr) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full bg-[#111b21] text-white">
-        <h2 className="text-2xl mb-4 text-[#e9edef]">Conectando ao WhatsApp</h2>
-        <div className="bg-white p-4 rounded-lg">
-          {/* Mock QR Code */}
-          <div className="w-64 h-64 bg-gray-800 flex items-center justify-center relative overflow-hidden">
-             <div className="absolute inset-0 grid grid-cols-6 grid-rows-6 gap-1 p-2">
-                {[...Array(36)].map((_, i) => (
-                    <div key={i} className={`bg-black ${Math.random() > 0.5 ? 'opacity-100' : 'opacity-0'}`}></div>
-                ))}
-             </div>
-             <div className="z-10 bg-white p-2 rounded-full">
-                <Smartphone className="w-8 h-8 text-[#00a884]" />
-             </div>
-          </div>
-        </div>
-        <p className="mt-6 text-gray-400">Abra o WhatsApp no seu celular e aponte para a tela</p>
-        <p className="mt-2 text-sm text-gray-500">Autenticando sessão segura...</p>
-        <div className="fixed bottom-4 text-xs text-gray-600">
-           Sistema Projetado por Marcos Rodrigo Teixeira
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full bg-[#f0f2f5]">
-      {/* Sidebar de Navegação */}
-      <div className="w-16 bg-[#202c33] flex flex-col items-center py-4 space-y-6 text-[#aebac1]">
-        <div className="p-2 bg-[#00a884] rounded-full text-white mb-2">
-            <MessageSquare size={24} />
-        </div>
-        
-        <NavButton icon={<Layout size={24} />} active={activeModule === 'crm'} onClick={() => setActiveModule('crm')} label="CRM" />
-        <NavButton icon={<Wand2 size={24} />} active={activeModule === 'automation'} onClick={() => setActiveModule('automation')} label="Automação" />
-        <NavButton icon={<Paperclip size={24} />} active={activeModule === 'media'} onClick={() => setActiveModule('media')} label="Hacks/Mídia" />
-        {userProfile.role === 'admin' && (
-           <NavButton icon={<Shield size={24} />} active={activeModule === 'admin'} onClick={() => setActiveModule('admin')} label="Admin" />
-        )}
-        
-        <div className="mt-auto space-y-4 flex flex-col items-center">
-            <button onClick={onLogout} className="hover:text-red-400" title="Sair">
-                <Settings size={24} />
-            </button>
-            <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs text-white font-bold">
-                {userProfile.name.substring(0,2).toUpperCase()}
-            </div>
-        </div>
-      </div>
-
-      {/* Conteúdo Principal */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="bg-[#202c33] h-14 flex items-center justify-between px-4 border-l border-gray-700 shadow-sm z-10">
-          <h2 className="text-[#e9edef] font-semibold text-lg flex items-center gap-2">
-            {activeModule === 'crm' && 'Gestão de Leads (Kanban)'}
-            {activeModule === 'automation' && 'Automação & Chatbot'}
-            {activeModule === 'media' && 'Ferramentas Avançadas'}
-            {activeModule === 'admin' && 'Painel Administrativo'}
-          </h2>
-          <div className="flex items-center gap-3">
-             <span className="text-xs text-[#00a884] bg-[#00a884]/10 px-2 py-1 rounded border border-[#00a884]/20">
-                ● Conectado
-             </span>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-auto bg-[#efeae2] relative">
-           {/* Background Pattern do WhatsApp */}
-           <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")' }}></div>
-           
-           <div className="relative z-10 h-full">
-              {activeModule === 'crm' && <CRMModule userProfile={userProfile} />}
-              {activeModule === 'automation' && <AutomationModule />}
-              {activeModule === 'media' && <MediaHacksModule />}
-              {activeModule === 'admin' && <AdminModule currentUser={userProfile} />}
-           </div>
-        </div>
-
-        {/* Rodapé Obrigatório */}
-        <div className="bg-[#111b21] text-gray-500 text-xs text-center py-1 border-t border-gray-800 z-20">
-           Sistema Projetado por Marcos Rodrigo Teixeira
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function NavButton({ icon, active, onClick, label }: any) {
-    return (
-        <button 
-            onClick={onClick}
-            title={label}
-            className={`p-2 rounded-lg transition-all ${active ? 'bg-[#00a884] text-white shadow-lg' : 'hover:bg-[#2a3942] hover:text-white'}`}
-        >
-            {icon}
-        </button>
-    );
-}
-
-// --- MÓDULO CRM (Kanban vs Lista) ---
-function CRMModule({ userProfile }: { userProfile: UserProfile }) {
-    const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');
-    const [leads, setLeads] = useState<Customer[]>([]);
+    <!-- Tailwind CSS (Estilização) -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    // Firestore Hooks
-    useEffect(() => {
-        const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'leads'));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            let data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Customer));
-            // Filtrar se não for admin
-            if (userProfile.role !== 'admin') {
-                data = data.filter(lead => !lead.assignedTo || lead.assignedTo === userProfile.uid);
-            }
-            setLeads(data);
-        }, (error) => console.error("Erro leads", error));
-        return () => unsubscribe();
-    }, [userProfile]);
+    <!-- Babel para processar JSX no navegador -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    const handleDragStart = (e: React.DragEvent, id: string) => {
-        e.dataTransfer.setData("leadId", id);
-    };
-
-    const handleDrop = async (e: React.DragEvent, newStatus: Customer['status']) => {
-        const leadId = e.dataTransfer.getData("leadId");
-        if(leadId) {
-            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leads', leadId), { status: newStatus });
+    <!-- Mapa de Importação para resolver bibliotecas -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.294.0",
+            "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+            "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
+            "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js",
+            "firebase/analytics": "https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js"
         }
-    };
+    }
+    </script>
 
-    const handleDragOver = (e: React.DragEvent) => e.preventDefault();
+    <style>
+        /* Ajustes finos de scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-    const addMockLead = async () => {
-        const names = ["João Silva", "Maria Oliveira", "Empresa Tech", "Restaurante Sabor"];
-        const statusOpts: Customer['status'][] = ['contact', 'negotiation', 'closed'];
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'leads'), {
-            name: names[Math.floor(Math.random() * names.length)],
-            phone: "551199999999",
-            status: statusOpts[Math.floor(Math.random() * statusOpts.length)],
-            tags: ["Interessado", "Novo"],
-            notes: "Cliente criado via teste.",
-            lastContact: new Date().toISOString(),
-            assignedTo: userProfile.uid
-        });
-    };
+    <!-- CÓDIGO DA APLICAÇÃO -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            MessageSquare, Users, BarChart3, Settings, Mic, 
+            Send, Paperclip, MoreVertical, Search, Plus, 
+            Trash2, Save, Play, Pause, Layout, List, 
+            Smartphone, UserCheck, Shield, Wand2, Phone,
+            FileText, Image as ImageIcon, Video, Ghost
+        } from 'lucide-react';
+        
+        import { initializeApp } from 'firebase/app';
+        import { getAnalytics } from "firebase/analytics";
+        import { 
+            getAuth, 
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signOut
+        } from 'firebase/auth';
+        import { 
+            getFirestore, 
+            collection, 
+            addDoc, 
+            query, 
+            onSnapshot, 
+            doc, 
+            updateDoc, 
+            deleteDoc,
+            setDoc,
+            getDocs,
+            where
+        } from 'firebase/firestore';
 
-    return (
-        <div className="p-4 h-full flex flex-col">
-            <div className="flex justify-between items-center mb-4">
-                <div className="bg-white p-1 rounded shadow-sm border border-gray-200">
-                    <button onClick={() => setViewMode('kanban')} className={`px-3 py-1 rounded text-sm font-medium ${viewMode === 'kanban' ? 'bg-[#00a884] text-white' : 'text-gray-600 hover:bg-gray-100'}`}>Kanban</button>
-                    <button onClick={() => setViewMode('list')} className={`px-3 py-1 rounded text-sm font-medium ${viewMode === 'list' ? 'bg-[#00a884] text-white' : 'text-gray-600 hover:bg-gray-100'}`}>Lista WhatsApp</button>
+        // --- CONFIGURAÇÃO FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyB69XbWCJEInd2kZGNTkjaPN-YbmAtVy0Y",
+            authDomain: "mega-robo-wa.firebaseapp.com",
+            projectId: "mega-robo-wa",
+            storageBucket: "mega-robo-wa.firebasestorage.app",
+            messagingSenderId: "23835456678",
+            appId: "1:23835456678:web:690ffd9a750ab762253067",
+            measurementId: "G-R9K2L5GKP4"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        // Fallback de segurança para analytics caso bloqueado por adblock
+        let analytics;
+        try { analytics = getAnalytics(app); } catch(e) { console.log("Analytics blocked"); }
+        
+        const appId = 'mega-robo-wa';
+
+        // --- COMPONENTE PRINCIPAL ---
+        function MegaRoboWA() {
+            const [user, setUser] = useState(null);
+            const [userProfile, setUserProfile] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [view, setView] = useState('login');
+            
+            // Estado de conexão WA simulado
+            const [waConnected, setWaConnected] = useState(false);
+
+            // Inicialização Auth
+            useEffect(() => {
+                const unsubscribe = onAuthStateChanged(auth, async (u) => {
+                    setUser(u);
+                    if (u) {
+                        // Buscar perfil do usuário
+                        const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+                        
+                        // Nota: Usamos onSnapshot para tempo real
+                        const unsubscribeProfile = onSnapshot(usersRef, (snapshot) => {
+                            const profiles = snapshot.docs.map(d => d.data());
+                            const myProfile = profiles.find(p => p.uid === u.uid);
+                            if (myProfile) {
+                                setUserProfile(myProfile);
+                                setView('dashboard');
+                            }
+                        }, (error) => console.error("Erro perfil", error));
+                        
+                        setLoading(false);
+                        return () => unsubscribeProfile();
+                    } else {
+                        setView('login');
+                        setUserProfile(null);
+                        setLoading(false);
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            if (loading) return <div className="flex items-center justify-center h-screen bg-gray-900 text-white">Carregando Mega Robo WA...</div>;
+
+            return (
+                <div className="flex flex-col h-screen font-sans bg-gray-100 overflow-hidden text-slate-900">
+                    {view === 'login' && <LoginScreen onLoginSuccess={() => setView('dashboard')} />}
+                    
+                    {view === 'dashboard' && user && userProfile && (
+                        <Dashboard 
+                            user={user} 
+                            userProfile={userProfile} 
+                            waConnected={waConnected}
+                            setWaConnected={setWaConnected}
+                            onLogout={() => auth.signOut()}
+                        />
+                    )}
                 </div>
-                <button onClick={addMockLead} className="flex items-center gap-2 bg-[#00a884] text-white px-4 py-2 rounded shadow hover:bg-[#008f6f]">
-                    <Plus size={16} /> Novo Lead
-                </button>
-            </div>
+            );
+        }
 
-            {viewMode === 'kanban' ? (
-                <div className="flex gap-4 h-full overflow-x-auto pb-2">
-                    <KanbanColumn title="Novo Contato" status="contact" leads={leads} onDrop={handleDrop} onDragStart={handleDragStart} color="bg-blue-500" />
-                    <KanbanColumn title="Em Negociação" status="negotiation" leads={leads} onDrop={handleDrop} onDragStart={handleDragStart} color="bg-yellow-500" />
-                    <KanbanColumn title="Fechado" status="closed" leads={leads} onDrop={handleDrop} onDragStart={handleDragStart} color="bg-green-500" />
-                </div>
-            ) : (
-                <div className="bg-white rounded-lg shadow h-full overflow-y-auto">
-                    {leads.map(lead => (
-                        <div key={lead.id} className="flex items-center justify-between p-4 border-b hover:bg-gray-50">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 font-bold">
-                                    {lead.name.charAt(0)}
-                                </div>
+        // --- TELA DE LOGIN ---
+        function LoginScreen({ onLoginSuccess }) {
+            const [isRegistering, setIsRegistering] = useState(false);
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [name, setName] = useState('');
+            const [error, setError] = useState('');
+
+            const handleAuth = async (e) => {
+                e.preventDefault();
+                setError('');
+                
+                try {
+                    if (isRegistering) {
+                        // Verificar se é o primeiro usuário para ser Admin
+                        const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+                        const snapshot = await getDocs(usersRef);
+                        const isFirstUser = snapshot.empty;
+                        const role = isFirstUser ? 'admin' : 'agent';
+
+                        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                        const uid = userCredential.user.uid;
+
+                        // Salvar perfil público para gestão
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid), {
+                            uid, email, name, role, createdAt: new Date().toISOString()
+                        });
+                    } else {
+                        await signInWithEmailAndPassword(auth, email, password);
+                    }
+                    onLoginSuccess();
+                } catch (err) {
+                    console.error(err);
+                    let msg = err.message;
+                    if(err.code === 'auth/invalid-credential') msg = "Email ou senha incorretos.";
+                    if(err.code === 'auth/email-already-in-use') msg = "Este email já está cadastrado.";
+                    if(err.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
+                    setError(msg);
+                }
+            };
+
+            return (
+                <div className="flex h-full bg-[#111b21] text-white">
+                    <div className="m-auto w-full max-w-md p-8 bg-[#202c33] rounded-lg shadow-xl border border-gray-700">
+                        <h1 className="text-3xl font-bold text-center mb-2 text-[#00a884]">Mega Robo WA</h1>
+                        <p className="text-center text-gray-400 mb-8">CRM & Automação Avançada</p>
+                        
+                        <form onSubmit={handleAuth} className="space-y-4">
+                            {isRegistering && (
                                 <div>
-                                    <h4 className="font-medium text-gray-900">{lead.name}</h4>
-                                    <p className="text-xs text-gray-500">{lead.phone}</p>
+                                    <label className="block text-sm font-medium mb-1">Nome Completo</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full p-2 rounded bg-[#2a3942] border border-gray-600 text-white focus:border-[#00a884] focus:outline-none placeholder-gray-500"
+                                        placeholder="Seu nome"
+                                        value={name}
+                                        onChange={(e) => setName(e.target.value)}
+                                        required
+                                    />
                                 </div>
+                            )}
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Email</label>
+                                <input 
+                                    type="email" 
+                                    className="w-full p-2 rounded bg-[#2a3942] border border-gray-600 text-white focus:border-[#00a884] focus:outline-none placeholder-gray-500"
+                                    placeholder="seu@email.com"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    required
+                                />
                             </div>
-                            <span className={`px-2 py-1 rounded text-xs ${lead.status === 'closed' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                                {lead.status}
-                            </span>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Senha</label>
+                                <input 
+                                    type="password" 
+                                    className="w-full p-2 rounded bg-[#2a3942] border border-gray-600 text-white focus:border-[#00a884] focus:outline-none placeholder-gray-500"
+                                    placeholder="******"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    required
+                                />
+                            </div>
+                            
+                            {error && <p className="text-red-400 text-sm bg-red-900/20 p-2 rounded border border-red-900/50">{error}</p>}
 
-function KanbanColumn({ title, status, leads, onDrop, onDragStart, color }: any) {
-    const columnLeads = leads.filter((l: Customer) => l.status === status);
-    return (
-        <div 
-            className="flex-1 min-w-[280px] bg-gray-100/80 rounded-lg flex flex-col h-full border border-gray-200"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => onDrop(e, status)}
-        >
-            <div className={`p-3 rounded-t-lg ${color} text-white font-semibold flex justify-between`}>
-                <span>{title}</span>
-                <span className="bg-white/20 px-2 rounded text-sm">{columnLeads.length}</span>
-            </div>
-            <div className="p-2 overflow-y-auto flex-1 space-y-2">
-                {columnLeads.map((lead: Customer) => (
-                    <div 
-                        key={lead.id} 
-                        draggable 
-                        onDragStart={(e) => onDragStart(e, lead.id)}
-                        className="bg-white p-3 rounded shadow-sm border border-gray-200 cursor-move hover:shadow-md transition-shadow group"
-                    >
-                        <div className="flex justify-between items-start mb-2">
-                            <span className="font-semibold text-gray-800">{lead.name}</span>
-                            <MoreVertical size={14} className="text-gray-400 cursor-pointer" />
+                            <button 
+                                type="submit"
+                                className="w-full py-2 bg-[#00a884] hover:bg-[#008f6f] rounded font-bold transition-colors shadow-lg"
+                            >
+                                {isRegistering ? 'Cadastrar Usuário' : 'Entrar no Sistema'}
+                            </button>
+                        </form>
+
+                        <div className="mt-4 text-center">
+                            <button 
+                                onClick={() => setIsRegistering(!isRegistering)}
+                                className="text-[#00a884] text-sm hover:underline"
+                            >
+                                {isRegistering ? 'Já tem conta? Faça login' : 'Criar nova conta'}
+                            </button>
                         </div>
-                        <div className="flex flex-wrap gap-1 mb-2">
-                            {lead.tags.map(tag => (
-                                <span key={tag} className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100">
-                                    {tag}
-                                </span>
-                            ))}
-                        </div>
-                        <p className="text-xs text-gray-500 line-clamp-2 mb-2">{lead.notes}</p>
-                        <div className="flex justify-between items-center pt-2 border-t border-gray-100">
-                             <Phone size={12} className="text-gray-400" />
-                             <span className="text-[10px] text-gray-400">Há 2h</span>
+                        
+                        <div className="mt-8 pt-4 border-t border-gray-700 text-center text-xs text-gray-500">
+                            Sistema Projetado por Marcos Rodrigo Teixeira
                         </div>
                     </div>
-                ))}
-            </div>
-        </div>
-    );
-}
+                </div>
+            );
+        }
 
-// --- MÓDULO AUTOMAÇÃO (Chatbot Builder) ---
-function AutomationModule() {
-    const [subTab, setSubTab] = useState<'campaign' | 'chatbot'>('chatbot');
-    const [nodes, setNodes] = useState<ChatbotNode[]>([]);
-    
-    // Firestore Nodes
-    useEffect(() => {
-        const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'bot_nodes'));
-        const unsubscribe = onSnapshot(q, (snap) => {
-            setNodes(snap.docs.map(d => ({id: d.id, ...d.data()} as ChatbotNode)));
-        });
-        return () => unsubscribe();
-    }, []);
+        // --- DASHBOARD PRINCIPAL ---
+        function Dashboard({ user, userProfile, waConnected, setWaConnected, onLogout }) {
+            const [activeModule, setActiveModule] = useState('crm');
+            const [showQr, setShowQr] = useState(!waConnected);
 
-    const addNode = async (parentId?: string) => {
-        const newNode: Omit<ChatbotNode, 'id'> = {
-            trigger: parentId ? "Nova Opção" : "inicio",
-            response: "Resposta do robô aqui...",
-            type: "text",
-            parentId: parentId
-        };
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bot_nodes'), newNode);
-    };
+            // Simulação de conexão com atraso
+            useEffect(() => {
+                if (showQr && !waConnected) {
+                    const timer = setTimeout(() => {
+                        setWaConnected(true);
+                        setShowQr(false);
+                    }, 3000); 
+                    return () => clearTimeout(timer);
+                }
+            }, [showQr]);
 
-    const deleteNode = async (id: string) => {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bot_nodes', id));
-    };
-
-    return (
-        <div className="p-6 max-w-6xl mx-auto h-full flex flex-col">
-            <div className="flex gap-4 mb-6 border-b border-gray-300 pb-2">
-                <button onClick={() => setSubTab('chatbot')} className={`pb-2 px-4 font-medium ${subTab === 'chatbot' ? 'text-[#00a884] border-b-2 border-[#00a884]' : 'text-gray-500'}`}>Árvore de Atendimento</button>
-                <button onClick={() => setSubTab('campaign')} className={`pb-2 px-4 font-medium ${subTab === 'campaign' ? 'text-[#00a884] border-b-2 border-[#00a884]' : 'text-gray-500'}`}>Disparos em Massa</button>
-            </div>
-
-            {subTab === 'chatbot' ? (
-                <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-6 overflow-y-auto">
-                    <div className="flex justify-between items-center mb-6">
-                        <div>
-                            <h3 className="text-lg font-bold text-gray-800">Fluxo de Conversa</h3>
-                            <p className="text-sm text-gray-500">Defina os gatilhos e respostas automáticas.</p>
+            if (showQr) {
+                return (
+                    <div className="flex flex-col items-center justify-center h-full bg-[#111b21] text-white">
+                        <h2 className="text-2xl mb-4 text-[#e9edef]">Conectando ao WhatsApp</h2>
+                        <div className="bg-white p-4 rounded-lg shadow-xl">
+                            {/* Mock QR Code */}
+                            <div className="w-64 h-64 bg-gray-800 flex items-center justify-center relative overflow-hidden">
+                                <div className="absolute inset-0 grid grid-cols-6 grid-rows-6 gap-1 p-2">
+                                    {[...Array(36)].map((_, i) => (
+                                        <div key={i} className={`bg-black ${Math.random() > 0.5 ? 'opacity-100' : 'opacity-0'} transition-opacity duration-500`}></div>
+                                    ))}
+                                </div>
+                                <div className="z-10 bg-white p-2 rounded-full shadow-lg">
+                                    <Smartphone className="w-8 h-8 text-[#00a884]" />
+                                </div>
+                            </div>
                         </div>
-                        <button onClick={() => addNode()} className="bg-[#00a884] text-white px-4 py-2 rounded text-sm hover:bg-[#008f6f]">
-                            + Nó Raiz (Início)
+                        <p className="mt-6 text-gray-400">Abra o WhatsApp no seu celular e aponte para a tela</p>
+                        <p className="mt-2 text-sm text-gray-500 animate-pulse">Autenticando sessão segura...</p>
+                        <div className="fixed bottom-4 text-xs text-gray-600">
+                            Sistema Projetado por Marcos Rodrigo Teixeira
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex h-full bg-[#f0f2f5]">
+                    {/* Sidebar de Navegação */}
+                    <div className="w-16 bg-[#202c33] flex flex-col items-center py-4 space-y-6 text-[#aebac1] shadow-xl z-20">
+                        <div className="p-2 bg-[#00a884] rounded-full text-white mb-2 shadow-lg">
+                            <MessageSquare size={24} />
+                        </div>
+                        
+                        <NavButton icon={<Layout size={24} />} active={activeModule === 'crm'} onClick={() => setActiveModule('crm')} label="CRM" />
+                        <NavButton icon={<Wand2 size={24} />} active={activeModule === 'automation'} onClick={() => setActiveModule('automation')} label="Automação" />
+                        <NavButton icon={<Paperclip size={24} />} active={activeModule === 'media'} onClick={() => setActiveModule('media')} label="Hacks/Mídia" />
+                        {userProfile.role === 'admin' && (
+                            <NavButton icon={<Shield size={24} />} active={activeModule === 'admin'} onClick={() => setActiveModule('admin')} label="Admin" />
+                        )}
+                        
+                        <div className="mt-auto space-y-4 flex flex-col items-center">
+                            <button onClick={onLogout} className="hover:text-red-400 transition-colors" title="Sair">
+                                <Settings size={24} />
+                            </button>
+                            <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-xs text-white font-bold border border-gray-500">
+                                {userProfile.name ? userProfile.name.substring(0,2).toUpperCase() : 'U'}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Conteúdo Principal */}
+                    <div className="flex-1 flex flex-col overflow-hidden relative">
+                        <header className="bg-[#202c33] h-14 flex items-center justify-between px-4 border-l border-gray-700 shadow-md z-10">
+                            <h2 className="text-[#e9edef] font-semibold text-lg flex items-center gap-2">
+                                {activeModule === 'crm' && 'Gestão de Leads (Kanban)'}
+                                {activeModule === 'automation' && 'Automação & Chatbot'}
+                                {activeModule === 'media' && 'Ferramentas Avançadas'}
+                                {activeModule === 'admin' && 'Painel Administrativo'}
+                            </h2>
+                            <div className="flex items-center gap-3">
+                                <span className="text-xs text-[#00a884] bg-[#00a884]/10 px-2 py-1 rounded border border-[#00a884]/20 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-[#00a884]"></span> Conectado
+                                </span>
+                            </div>
+                        </header>
+
+                        <div className="flex-1 overflow-auto bg-[#efeae2] relative">
+                            {/* Background Pattern do WhatsApp */}
+                            <div className="absolute inset-0 opacity-[0.06] pointer-events-none" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")' }}></div>
+                            
+                            <div className="relative z-10 h-full">
+                                {activeModule === 'crm' && <CRMModule userProfile={userProfile} />}
+                                {activeModule === 'automation' && <AutomationModule />}
+                                {activeModule === 'media' && <MediaHacksModule />}
+                                {activeModule === 'admin' && <AdminModule currentUser={userProfile} />}
+                            </div>
+                        </div>
+
+                        {/* Rodapé Obrigatório */}
+                        <div className="bg-[#111b21] text-gray-500 text-xs text-center py-1 border-t border-gray-800 z-20">
+                            Sistema Projetado por Marcos Rodrigo Teixeira
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function NavButton({ icon, active, onClick, label }) {
+            return (
+                <button 
+                    onClick={onClick}
+                    title={label}
+                    className={`p-2 rounded-lg transition-all duration-200 ${active ? 'bg-[#00a884] text-white shadow-lg scale-105' : 'hover:bg-[#2a3942] hover:text-white'}`}
+                >
+                    {icon}
+                </button>
+            );
+        }
+
+        // --- MÓDULO CRM ---
+        function CRMModule({ userProfile }) {
+            const [viewMode, setViewMode] = useState('kanban');
+            const [leads, setLeads] = useState([]);
+            
+            useEffect(() => {
+                const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'leads'));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    let data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    // Filtrar se não for admin
+                    if (userProfile.role !== 'admin') {
+                        data = data.filter(lead => !lead.assignedTo || lead.assignedTo === userProfile.uid);
+                    }
+                    setLeads(data);
+                }, (error) => console.error("Erro leads", error));
+                return () => unsubscribe();
+            }, [userProfile]);
+
+            // Drag and Drop Simplificado para HTML
+            const handleDragStart = (e, id) => {
+                e.dataTransfer.setData("leadId", id);
+            };
+
+            const handleDrop = async (e, newStatus) => {
+                e.preventDefault();
+                const leadId = e.dataTransfer.getData("leadId");
+                if(leadId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leads', leadId), { status: newStatus });
+                }
+            };
+
+            const handleDragOver = (e) => e.preventDefault();
+
+            const addMockLead = async () => {
+                const names = ["João Silva", "Maria Oliveira", "Empresa Tech", "Restaurante Sabor"];
+                const statusOpts = ['contact', 'negotiation', 'closed'];
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'leads'), {
+                    name: names[Math.floor(Math.random() * names.length)],
+                    phone: "551199999999",
+                    status: statusOpts[Math.floor(Math.random() * statusOpts.length)],
+                    tags: ["Interessado", "Novo"],
+                    notes: "Cliente criado via teste.",
+                    lastContact: new Date().toISOString(),
+                    assignedTo: userProfile.uid
+                });
+            };
+
+            return (
+                <div className="p-4 h-full flex flex-col">
+                    <div className="flex justify-between items-center mb-4">
+                        <div className="bg-white p-1 rounded shadow-sm border border-gray-200">
+                            <button onClick={() => setViewMode('kanban')} className={`px-3 py-1 rounded text-sm font-medium transition-colors ${viewMode === 'kanban' ? 'bg-[#00a884] text-white shadow' : 'text-gray-600 hover:bg-gray-100'}`}>Kanban</button>
+                            <button onClick={() => setViewMode('list')} className={`px-3 py-1 rounded text-sm font-medium transition-colors ${viewMode === 'list' ? 'bg-[#00a884] text-white shadow' : 'text-gray-600 hover:bg-gray-100'}`}>Lista WhatsApp</button>
+                        </div>
+                        <button onClick={addMockLead} className="flex items-center gap-2 bg-[#00a884] text-white px-4 py-2 rounded shadow hover:bg-[#008f6f] transition-colors">
+                            <Plus size={16} /> Novo Lead
                         </button>
                     </div>
 
-                    <div className="space-y-4">
-                        {nodes.filter(n => !n.parentId).map(node => (
-                           <ChatbotNodeItem key={node.id} node={node} allNodes={nodes} onAddChild={addNode} onDelete={deleteNode} /> 
-                        ))}
-                    </div>
-                </div>
-            ) : (
-                <div className="bg-white p-8 rounded shadow text-center">
-                    <Send size={48} className="mx-auto text-gray-300 mb-4" />
-                    <h3 className="text-xl font-bold text-gray-700">Motor de Disparos</h3>
-                    <p className="text-gray-500 mb-6">Importe CSV ou use Tags do Kanban para enviar mensagens.</p>
-                    <div className="grid grid-cols-2 gap-4 max-w-2xl mx-auto">
-                         <div className="border border-dashed border-gray-300 p-6 rounded hover:bg-gray-50 cursor-pointer">
-                            <span className="block font-bold text-gray-700">Importar CSV</span>
-                            <span className="text-xs text-gray-400">Nome, Telefone, Variaveis</span>
-                         </div>
-                         <div className="border border-dashed border-gray-300 p-6 rounded hover:bg-gray-50 cursor-pointer">
-                            <span className="block font-bold text-gray-700">Selecionar do Kanban</span>
-                            <span className="text-xs text-gray-400">Filtrar por Coluna ou Tag</span>
-                         </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-}
-
-function ChatbotNodeItem({ node, allNodes, onAddChild, onDelete }: any) {
-    const children = allNodes.filter((n: ChatbotNode) => n.parentId === node.id);
-    const [isEditing, setIsEditing] = useState(false);
-    const [localData, setLocalData] = useState(node);
-
-    const saveNode = async () => {
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bot_nodes', node.id), {
-            trigger: localData.trigger,
-            response: localData.response,
-            type: localData.type
-        });
-        setIsEditing(false);
-    };
-
-    return (
-        <div className="ml-4 border-l-2 border-gray-200 pl-4 relative">
-            <div className="bg-gray-50 border border-gray-200 p-4 rounded-lg w-full max-w-2xl relative group">
-                {/* Linha conectora visual */}
-                <div className="absolute -left-[18px] top-6 w-4 h-0.5 bg-gray-200"></div>
-
-                {isEditing ? (
-                    <div className="space-y-3">
-                         <div>
-                            <label className="text-xs font-bold text-gray-500 uppercase">Gatilho (Entrada do Usuário)</label>
-                            <input 
-                                type="text" 
-                                className="w-full p-2 border rounded text-black font-medium text-sm focus:border-[#00a884] outline-none" 
-                                value={localData.trigger}
-                                onChange={e => setLocalData({...localData, trigger: e.target.value})}
-                            />
-                         </div>
-                         <div>
-                            <label className="text-xs font-bold text-gray-500 uppercase">Resposta do Bot</label>
-                            <textarea 
-                                className="w-full p-2 border rounded text-black text-sm focus:border-[#00a884] outline-none" 
-                                rows={3}
-                                value={localData.response}
-                                onChange={e => setLocalData({...localData, response: e.target.value})}
-                            />
-                         </div>
-                         <div className="flex justify-between">
-                            <select 
-                                className="p-1 border rounded text-xs text-black"
-                                value={localData.type}
-                                onChange={e => setLocalData({...localData, type: e.target.value})}
-                            >
-                                <option value="text">Texto Simples</option>
-                                <option value="buttons">Botões Interativos</option>
-                                <option value="media">Mídia (Img/Vid)</option>
-                            </select>
-                            <button onClick={saveNode} className="text-xs bg-green-600 text-white px-3 py-1 rounded">Salvar</button>
-                         </div>
-                    </div>
-                ) : (
-                    <div className="flex justify-between items-start">
-                        <div>
-                            <div className="flex items-center gap-2 mb-1">
-                                <span className="bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded uppercase font-bold tracking-wider">
-                                    Se receber:
-                                </span>
-                                <span className="font-bold text-gray-800 text-sm">"{node.trigger}"</span>
-                            </div>
-                            <div className="flex items-start gap-2">
-                                <span className="bg-green-100 text-green-800 text-[10px] px-2 py-0.5 rounded uppercase font-bold tracking-wider mt-1">
-                                    Responder:
-                                </span>
-                                <p className="text-sm text-gray-600 leading-snug">{node.response}</p>
-                            </div>
+                    {viewMode === 'kanban' ? (
+                        <div className="flex gap-4 h-full overflow-x-auto pb-2">
+                            <KanbanColumn title="Novo Contato" status="contact" leads={leads} onDrop={handleDrop} onDragStart={handleDragStart} color="bg-blue-500" headerColor="bg-blue-600" />
+                            <KanbanColumn title="Em Negociação" status="negotiation" leads={leads} onDrop={handleDrop} onDragStart={handleDragStart} color="bg-yellow-500" headerColor="bg-yellow-600" />
+                            <KanbanColumn title="Fechado" status="closed" leads={leads} onDrop={handleDrop} onDragStart={handleDragStart} color="bg-green-500" headerColor="bg-green-600" />
                         </div>
-                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                             <button onClick={() => setIsEditing(true)} className="p-1 hover:bg-gray-200 rounded text-gray-600"><Settings size={14}/></button>
-                             <button onClick={() => onDelete(node.id)} className="p-1 hover:bg-red-100 rounded text-red-500"><Trash2 size={14}/></button>
-                             <button onClick={() => onAddChild(node.id)} className="p-1 hover:bg-blue-100 rounded text-blue-500"><Plus size={14}/></button>
-                        </div>
-                    </div>
-                )}
-            </div>
-            {/* Renderizar filhos recursivamente */}
-            <div className="mt-4">
-                {children.map((child: any) => (
-                    <ChatbotNodeItem key={child.id} node={child} allNodes={allNodes} onAddChild={onAddChild} onDelete={onDelete} />
-                ))}
-            </div>
-        </div>
-    );
-}
-
-// --- MÓDULO HACKS & MÍDIA ---
-function MediaHacksModule() {
-    return (
-        <div className="p-6 max-w-5xl mx-auto">
-             <h2 className="text-2xl font-bold text-gray-800 mb-6">Ferramentas Avançadas (Hacks)</h2>
-             
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 {/* Hack de Áudio */}
-                 <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden">
-                     <div className="absolute top-0 right-0 p-2 bg-purple-100 rounded-bl-lg">
-                        <Mic className="text-purple-600" />
-                     </div>
-                     <h3 className="font-bold text-gray-800 mb-2">Injetor de Áudio (OGG)</h3>
-                     <p className="text-sm text-gray-500 mb-4">Envia arquivos .mp3/.ogg como se fossem gravados no microfone (azul).</p>
-                     
-                     <div className="border-2 border-dashed border-gray-300 rounded p-4 text-center hover:bg-gray-50 transition-colors cursor-pointer">
-                        <p className="text-sm text-gray-600">Arraste um arquivo de áudio ou clique</p>
-                     </div>
-                     <div className="mt-4 flex gap-2">
-                        <button className="flex-1 bg-purple-600 text-white py-2 rounded text-sm font-medium hover:bg-purple-700">Converter & Enviar</button>
-                     </div>
-                 </div>
-
-                 {/* Marcação Fantasma */}
-                 <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden">
-                     <div className="absolute top-0 right-0 p-2 bg-orange-100 rounded-bl-lg">
-                        <Ghost className="text-orange-600" />
-                     </div>
-                     <h3 className="font-bold text-gray-800 mb-2">Marcação Fantasma</h3>
-                     <p className="text-sm text-gray-500 mb-4">Menciona todos os membros de um grupo sem exibir a lista azul de @nomes.</p>
-                     
-                     <div className="bg-yellow-50 p-3 rounded border border-yellow-200 mb-4 text-xs text-yellow-800">
-                        ⚠ Risco de banimento moderado. Use com intervalos.
-                     </div>
-                     <textarea 
-                        className="w-full p-2 border rounded text-black text-sm mb-2" 
-                        placeholder="Digite sua mensagem para o grupo..."
-                        rows={3}
-                     />
-                     <button className="w-full bg-orange-600 text-white py-2 rounded text-sm font-medium hover:bg-orange-700">Disparar Ghost Tag</button>
-                 </div>
-
-                 {/* Agendamento de Status */}
-                 <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden">
-                     <div className="absolute top-0 right-0 p-2 bg-blue-100 rounded-bl-lg">
-                        <ImageIcon className="text-blue-600" />
-                     </div>
-                     <h3 className="font-bold text-gray-800 mb-2">Agendar Status/Stories</h3>
-                     <p className="text-sm text-gray-500 mb-4">Postagem automática de fotos e vídeos no Status.</p>
-                     
-                     <div className="flex gap-2 mb-3">
-                         <button className="flex-1 border p-2 rounded flex items-center justify-center gap-2 hover:bg-gray-50"><ImageIcon size={16}/> Foto</button>
-                         <button className="flex-1 border p-2 rounded flex items-center justify-center gap-2 hover:bg-gray-50"><Video size={16}/> Vídeo</button>
-                     </div>
-                     <input type="datetime-local" className="w-full p-2 border rounded text-black text-sm mb-3" />
-                     <button className="w-full bg-blue-600 text-white py-2 rounded text-sm font-medium hover:bg-blue-700">Agendar Postagem</button>
-                 </div>
-
-                 {/* IA Assistente */}
-                 <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden">
-                     <div className="absolute top-0 right-0 p-2 bg-green-100 rounded-bl-lg">
-                        <Wand2 className="text-green-600" />
-                     </div>
-                     <h3 className="font-bold text-gray-800 mb-2">IA Copilot (Gemini/GPT)</h3>
-                     <p className="text-sm text-gray-500 mb-4">Melhore textos e traduza mensagens em tempo real.</p>
-                     <div className="flex gap-2">
-                         <input type="text" placeholder="Chave da API (OpenAI/Google)" className="flex-1 p-2 text-sm border rounded text-black" />
-                         <button className="bg-green-600 text-white px-4 rounded text-sm">Salvar</button>
-                     </div>
-                 </div>
-             </div>
-        </div>
-    );
-}
-
-// --- MÓDULO ADMIN (Gestão de Equipe) ---
-function AdminModule({ currentUser }: { currentUser: UserProfile }) {
-    const [users, setUsers] = useState<UserProfile[]>([]);
-
-    useEffect(() => {
-        const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
-        const unsubscribe = onSnapshot(q, (snap) => {
-            setUsers(snap.docs.map(d => ({uid: d.id, ...d.data()} as UserProfile)));
-        });
-        return () => unsubscribe();
-    }, []);
-
-    const toggleRole = async (user: UserProfile) => {
-        if(user.uid === currentUser.uid) return; // Não mudar o próprio
-        const newRole = user.role === 'admin' ? 'agent' : 'admin';
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), { role: newRole });
-    };
-
-    return (
-        <div className="p-8 max-w-4xl mx-auto">
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">Gestão de Equipe</h2>
-            <p className="text-gray-500 mb-8">Gerencie permissões e visualize a performance dos agentes.</p>
-
-            <div className="bg-white rounded-lg shadow overflow-hidden">
-                <table className="w-full text-left">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                        <tr>
-                            <th className="p-4 text-sm font-semibold text-gray-600">Usuário</th>
-                            <th className="p-4 text-sm font-semibold text-gray-600">Email</th>
-                            <th className="p-4 text-sm font-semibold text-gray-600">Função</th>
-                            <th className="p-4 text-sm font-semibold text-gray-600 text-right">Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                        {users.map(u => (
-                            <tr key={u.uid} className="hover:bg-gray-50">
-                                <td className="p-4 flex items-center gap-3">
-                                    <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
-                                        {u.name?.charAt(0) || '?'}
+                    ) : (
+                        <div className="bg-white rounded-lg shadow h-full overflow-y-auto">
+                            {leads.map(lead => (
+                                <div key={lead.id} className="flex items-center justify-between p-4 border-b hover:bg-gray-50 transition-colors">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 font-bold">
+                                            {lead.name.charAt(0)}
+                                        </div>
+                                        <div>
+                                            <h4 className="font-medium text-gray-900">{lead.name}</h4>
+                                            <p className="text-xs text-gray-500">{lead.phone}</p>
+                                        </div>
                                     </div>
-                                    <span className="font-medium text-gray-800">{u.name}</span>
-                                </td>
-                                <td className="p-4 text-sm text-gray-600">{u.email}</td>
-                                <td className="p-4">
-                                    <span className={`px-2 py-1 rounded text-xs font-medium ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
-                                        {u.role.toUpperCase()}
+                                    <span className={`px-2 py-1 rounded text-xs font-medium ${lead.status === 'closed' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                                        {lead.status}
                                     </span>
-                                </td>
-                                <td className="p-4 text-right">
-                                    <button 
-                                        onClick={() => toggleRole(u)}
-                                        disabled={u.uid === currentUser.uid}
-                                        className={`text-xs px-3 py-1 rounded border ${u.uid === currentUser.uid ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100'}`}
-                                    >
-                                        Alternar Cargo
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
 
-            <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white p-4 rounded shadow-sm border-l-4 border-[#00a884]">
-                    <span className="text-gray-500 text-sm">Total de Agentes</span>
-                    <p className="text-2xl font-bold text-gray-800">{users.length}</p>
+        function KanbanColumn({ title, status, leads, onDrop, onDragStart, headerColor }) {
+            const columnLeads = leads.filter(l => l.status === status);
+            return (
+                <div 
+                    className="flex-1 min-w-[280px] bg-gray-100/90 rounded-lg flex flex-col h-full border border-gray-300 shadow-inner"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => onDrop(e, status)}
+                >
+                    <div className={`p-3 rounded-t-lg ${headerColor} text-white font-semibold flex justify-between items-center shadow-sm`}>
+                        <span>{title}</span>
+                        <span className="bg-white/20 px-2 py-0.5 rounded text-xs font-bold">{columnLeads.length}</span>
+                    </div>
+                    <div className="p-2 overflow-y-auto flex-1 space-y-2">
+                        {columnLeads.map(lead => (
+                            <div 
+                                key={lead.id} 
+                                draggable 
+                                onDragStart={(e) => onDragStart(e, lead.id)}
+                                className="bg-white p-3 rounded shadow-sm border border-gray-200 cursor-move hover:shadow-md transition-all group active:scale-95"
+                            >
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="font-semibold text-gray-800">{lead.name}</span>
+                                    <MoreVertical size={14} className="text-gray-400 cursor-pointer hover:text-gray-600" />
+                                </div>
+                                <div className="flex flex-wrap gap-1 mb-2">
+                                    {lead.tags && lead.tags.map(tag => (
+                                        <span key={tag} className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 font-medium">
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-gray-500 line-clamp-2 mb-2">{lead.notes}</p>
+                                <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+                                        <Phone size={12} className="text-gray-400" />
+                                        <span className="text-[10px] text-gray-400">Há 2h</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-                <div className="bg-white p-4 rounded shadow-sm border-l-4 border-blue-500">
-                    <span className="text-gray-500 text-sm">Mensagens Hoje</span>
-                    <p className="text-2xl font-bold text-gray-800">1,240</p>
+            );
+        }
+
+        // --- MÓDULO AUTOMAÇÃO ---
+        function AutomationModule() {
+            const [subTab, setSubTab] = useState('chatbot');
+            const [nodes, setNodes] = useState([]);
+            
+            useEffect(() => {
+                const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'bot_nodes'));
+                const unsubscribe = onSnapshot(q, (snap) => {
+                    setNodes(snap.docs.map(d => ({id: d.id, ...d.data()})));
+                });
+                return () => unsubscribe();
+            }, []);
+
+            const addNode = async (parentId) => {
+                const newNode = {
+                    trigger: parentId ? "Nova Opção" : "inicio",
+                    response: "Resposta do robô aqui...",
+                    type: "text",
+                    parentId: parentId || null
+                };
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bot_nodes'), newNode);
+            };
+
+            const deleteNode = async (id) => {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bot_nodes', id));
+            };
+
+            return (
+                <div className="p-6 max-w-6xl mx-auto h-full flex flex-col">
+                    <div className="flex gap-4 mb-6 border-b border-gray-300 pb-2">
+                        <button onClick={() => setSubTab('chatbot')} className={`pb-2 px-4 font-medium transition-colors ${subTab === 'chatbot' ? 'text-[#00a884] border-b-2 border-[#00a884]' : 'text-gray-500 hover:text-gray-700'}`}>Árvore de Atendimento</button>
+                        <button onClick={() => setSubTab('campaign')} className={`pb-2 px-4 font-medium transition-colors ${subTab === 'campaign' ? 'text-[#00a884] border-b-2 border-[#00a884]' : 'text-gray-500 hover:text-gray-700'}`}>Disparos em Massa</button>
+                    </div>
+
+                    {subTab === 'chatbot' ? (
+                        <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-6 overflow-y-auto">
+                            <div className="flex justify-between items-center mb-6">
+                                <div>
+                                    <h3 className="text-lg font-bold text-gray-800">Fluxo de Conversa</h3>
+                                    <p className="text-sm text-gray-500">Defina os gatilhos e respostas automáticas.</p>
+                                </div>
+                                <button onClick={() => addNode()} className="bg-[#00a884] text-white px-4 py-2 rounded text-sm hover:bg-[#008f6f] shadow-sm transition-colors">
+                                    + Nó Raiz (Início)
+                                </button>
+                            </div>
+
+                            <div className="space-y-4">
+                                {nodes.filter(n => !n.parentId).map(node => (
+                                    <ChatbotNodeItem key={node.id} node={node} allNodes={nodes} onAddChild={addNode} onDelete={deleteNode} /> 
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="bg-white p-8 rounded shadow text-center">
+                            <Send size={48} className="mx-auto text-gray-300 mb-4" />
+                            <h3 className="text-xl font-bold text-gray-700">Motor de Disparos</h3>
+                            <p className="text-gray-500 mb-6">Importe CSV ou use Tags do Kanban para enviar mensagens.</p>
+                            <div className="grid grid-cols-2 gap-4 max-w-2xl mx-auto">
+                                    <div className="border border-dashed border-gray-300 p-6 rounded hover:bg-gray-50 cursor-pointer transition-colors group">
+                                        <span className="block font-bold text-gray-700 group-hover:text-[#00a884]">Importar CSV</span>
+                                        <span className="text-xs text-gray-400">Nome, Telefone, Variaveis</span>
+                                    </div>
+                                    <div className="border border-dashed border-gray-300 p-6 rounded hover:bg-gray-50 cursor-pointer transition-colors group">
+                                        <span className="block font-bold text-gray-700 group-hover:text-[#00a884]">Selecionar do Kanban</span>
+                                        <span className="text-xs text-gray-400">Filtrar por Coluna ou Tag</span>
+                                    </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
-                <div className="bg-white p-4 rounded shadow-sm border-l-4 border-yellow-500">
-                    <span className="text-gray-500 text-sm">Leads Novos</span>
-                    <p className="text-2xl font-bold text-gray-800">34</p>
+            );
+        }
+
+        function ChatbotNodeItem({ node, allNodes, onAddChild, onDelete }) {
+            const children = allNodes.filter(n => n.parentId === node.id);
+            const [isEditing, setIsEditing] = useState(false);
+            const [localData, setLocalData] = useState(node);
+
+            const saveNode = async () => {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bot_nodes', node.id), {
+                    trigger: localData.trigger,
+                    response: localData.response,
+                    type: localData.type
+                });
+                setIsEditing(false);
+            };
+
+            return (
+                <div className="ml-4 border-l-2 border-gray-200 pl-4 relative">
+                    <div className="bg-gray-50 border border-gray-200 p-4 rounded-lg w-full max-w-2xl relative group hover:border-gray-300 transition-colors shadow-sm">
+                        {/* Linha conectora visual */}
+                        <div className="absolute -left-[18px] top-6 w-4 h-0.5 bg-gray-200"></div>
+
+                        {isEditing ? (
+                            <div className="space-y-3">
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500 uppercase">Gatilho (Entrada do Usuário)</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-2 border rounded text-black font-medium text-sm focus:border-[#00a884] outline-none bg-white" 
+                                            value={localData.trigger}
+                                            onChange={e => setLocalData({...localData, trigger: e.target.value})}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500 uppercase">Resposta do Bot</label>
+                                        <textarea 
+                                            className="w-full p-2 border rounded text-black text-sm focus:border-[#00a884] outline-none bg-white" 
+                                            rows={3}
+                                            value={localData.response}
+                                            onChange={e => setLocalData({...localData, response: e.target.value})}
+                                        />
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <select 
+                                            className="p-1 border rounded text-xs text-black bg-white"
+                                            value={localData.type}
+                                            onChange={e => setLocalData({...localData, type: e.target.value})}
+                                        >
+                                            <option value="text">Texto Simples</option>
+                                            <option value="buttons">Botões Interativos</option>
+                                            <option value="media">Mídia (Img/Vid)</option>
+                                        </select>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setIsEditing(false)} className="text-xs bg-gray-300 text-gray-800 px-3 py-1 rounded hover:bg-gray-400">Cancelar</button>
+                                            <button onClick={saveNode} className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700">Salvar</button>
+                                        </div>
+                                    </div>
+                            </div>
+                        ) : (
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className="bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded uppercase font-bold tracking-wider">
+                                            Se receber:
+                                        </span>
+                                        <span className="font-bold text-gray-800 text-sm">"{node.trigger}"</span>
+                                    </div>
+                                    <div className="flex items-start gap-2">
+                                        <span className="bg-green-100 text-green-800 text-[10px] px-2 py-0.5 rounded uppercase font-bold tracking-wider mt-1">
+                                            Responder:
+                                        </span>
+                                        <p className="text-sm text-gray-600 leading-snug">{node.response}</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => setIsEditing(true)} className="p-1 hover:bg-gray-200 rounded text-gray-600" title="Editar"><Settings size={14}/></button>
+                                        <button onClick={() => onDelete(node.id)} className="p-1 hover:bg-red-100 rounded text-red-500" title="Excluir"><Trash2 size={14}/></button>
+                                        <button onClick={() => onAddChild(node.id)} className="p-1 hover:bg-blue-100 rounded text-blue-500" title="Adicionar Filho"><Plus size={14}/></button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    {/* Renderizar filhos recursivamente */}
+                    <div className="mt-4">
+                        {children.map(child => (
+                            <ChatbotNodeItem key={child.id} node={child} allNodes={allNodes} onAddChild={onAddChild} onDelete={onDelete} />
+                        ))}
+                    </div>
                 </div>
-            </div>
-        </div>
-    );
-}
+            );
+        }
+
+        // --- MÓDULO HACKS & MÍDIA ---
+        function MediaHacksModule() {
+            return (
+                <div className="p-6 max-w-5xl mx-auto">
+                        <h2 className="text-2xl font-bold text-gray-800 mb-6">Ferramentas Avançadas (Hacks)</h2>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Hack de Áudio */}
+                            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden group hover:shadow-md transition-shadow">
+                                <div className="absolute top-0 right-0 p-2 bg-purple-100 rounded-bl-lg">
+                                    <Mic className="text-purple-600" />
+                                </div>
+                                <h3 className="font-bold text-gray-800 mb-2">Injetor de Áudio (OGG)</h3>
+                                <p className="text-sm text-gray-500 mb-4">Envia arquivos .mp3/.ogg como se fossem gravados no microfone (azul).</p>
+                                
+                                <div className="border-2 border-dashed border-gray-300 rounded p-4 text-center hover:bg-gray-50 transition-colors cursor-pointer">
+                                    <p className="text-sm text-gray-600">Arraste um arquivo de áudio ou clique</p>
+                                </div>
+                                <div className="mt-4 flex gap-2">
+                                    <button className="flex-1 bg-purple-600 text-white py-2 rounded text-sm font-medium hover:bg-purple-700 shadow-sm">Converter & Enviar</button>
+                                </div>
+                            </div>
+
+                            {/* Marcação Fantasma */}
+                            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden group hover:shadow-md transition-shadow">
+                                <div className="absolute top-0 right-0 p-2 bg-orange-100 rounded-bl-lg">
+                                    <Ghost className="text-orange-600" />
+                                </div>
+                                <h3 className="font-bold text-gray-800 mb-2">Marcação Fantasma</h3>
+                                <p className="text-sm text-gray-500 mb-4">Menciona todos os membros de um grupo sem exibir a lista azul de @nomes.</p>
+                                
+                                <div className="bg-yellow-50 p-3 rounded border border-yellow-200 mb-4 text-xs text-yellow-800 font-medium">
+                                    ⚠ Risco de banimento moderado. Use com intervalos.
+                                </div>
+                                <textarea 
+                                    className="w-full p-2 border rounded text-black text-sm mb-2 focus:border-[#00a884] outline-none" 
+                                    placeholder="Digite sua mensagem para o grupo..."
+                                    rows={3}
+                                />
+                                <button className="w-full bg-orange-600 text-white py-2 rounded text-sm font-medium hover:bg-orange-700 shadow-sm">Disparar Ghost Tag</button>
+                            </div>
+
+                            {/* Agendamento de Status */}
+                            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden group hover:shadow-md transition-shadow">
+                                <div className="absolute top-0 right-0 p-2 bg-blue-100 rounded-bl-lg">
+                                    <ImageIcon className="text-blue-600" />
+                                </div>
+                                <h3 className="font-bold text-gray-800 mb-2">Agendar Status/Stories</h3>
+                                <p className="text-sm text-gray-500 mb-4">Postagem automática de fotos e vídeos no Status.</p>
+                                
+                                <div className="flex gap-2 mb-3">
+                                    <button className="flex-1 border p-2 rounded flex items-center justify-center gap-2 hover:bg-gray-50 text-sm font-medium"><ImageIcon size={16}/> Foto</button>
+                                    <button className="flex-1 border p-2 rounded flex items-center justify-center gap-2 hover:bg-gray-50 text-sm font-medium"><Video size={16}/> Vídeo</button>
+                                </div>
+                                <input type="datetime-local" className="w-full p-2 border rounded text-black text-sm mb-3 focus:border-[#00a884] outline-none" />
+                                <button className="w-full bg-blue-600 text-white py-2 rounded text-sm font-medium hover:bg-blue-700 shadow-sm">Agendar Postagem</button>
+                            </div>
+
+                            {/* IA Assistente */}
+                            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 relative overflow-hidden group hover:shadow-md transition-shadow">
+                                <div className="absolute top-0 right-0 p-2 bg-green-100 rounded-bl-lg">
+                                    <Wand2 className="text-green-600" />
+                                </div>
+                                <h3 className="font-bold text-gray-800 mb-2">IA Copilot (Gemini/GPT)</h3>
+                                <p className="text-sm text-gray-500 mb-4">Melhore textos e traduza mensagens em tempo real.</p>
+                                <div className="flex gap-2">
+                                    <input type="text" placeholder="Chave da API (OpenAI/Google)" className="flex-1 p-2 text-sm border rounded text-black focus:border-[#00a884] outline-none" />
+                                    <button className="bg-green-600 text-white px-4 rounded text-sm hover:bg-green-700 shadow-sm">Salvar</button>
+                                </div>
+                            </div>
+                        </div>
+                </div>
+            );
+        }
+
+        // --- MÓDULO ADMIN ---
+        function AdminModule({ currentUser }) {
+            const [users, setUsers] = useState([]);
+
+            useEffect(() => {
+                const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
+                const unsubscribe = onSnapshot(q, (snap) => {
+                    setUsers(snap.docs.map(d => ({uid: d.id, ...d.data()})));
+                });
+                return () => unsubscribe();
+            }, []);
+
+            const toggleRole = async (user) => {
+                if(user.uid === currentUser.uid) return;
+                const newRole = user.role === 'admin' ? 'agent' : 'admin';
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid), { role: newRole });
+            };
+
+            return (
+                <div className="p-8 max-w-4xl mx-auto">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-2">Gestão de Equipe</h2>
+                    <p className="text-gray-500 mb-8">Gerencie permissões e visualize a performance dos agentes.</p>
+
+                    <div className="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
+                        <table className="w-full text-left">
+                            <thead className="bg-gray-50 border-b border-gray-200">
+                                <tr>
+                                    <th className="p-4 text-sm font-semibold text-gray-600 uppercase tracking-wider">Usuário</th>
+                                    <th className="p-4 text-sm font-semibold text-gray-600 uppercase tracking-wider">Email</th>
+                                    <th className="p-4 text-sm font-semibold text-gray-600 uppercase tracking-wider">Função</th>
+                                    <th className="p-4 text-sm font-semibold text-gray-600 uppercase tracking-wider text-right">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {users.map(u => (
+                                    <tr key={u.uid} className="hover:bg-gray-50 transition-colors">
+                                        <td className="p-4 flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 border border-gray-300">
+                                                {u.name?.charAt(0) || '?'}
+                                            </div>
+                                            <span className="font-medium text-gray-800">{u.name}</span>
+                                        </td>
+                                        <td className="p-4 text-sm text-gray-600">{u.email}</td>
+                                        <td className="p-4">
+                                            <span className={`px-2 py-1 rounded text-xs font-bold tracking-wide ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                {u.role.toUpperCase()}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 text-right">
+                                            <button 
+                                                onClick={() => toggleRole(u)}
+                                                disabled={u.uid === currentUser.uid}
+                                                className={`text-xs px-3 py-1 rounded border font-medium transition-colors ${u.uid === currentUser.uid ? 'opacity-50 cursor-not-allowed bg-gray-100' : 'hover:bg-gray-100 border-gray-300 text-gray-700'}`}
+                                            >
+                                                Alternar Cargo
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-white p-4 rounded shadow-sm border-l-4 border-[#00a884]">
+                            <span className="text-gray-500 text-sm font-medium">Total de Agentes</span>
+                            <p className="text-2xl font-bold text-gray-800">{users.length}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow-sm border-l-4 border-blue-500">
+                            <span className="text-gray-500 text-sm font-medium">Mensagens Hoje</span>
+                            <p className="text-2xl font-bold text-gray-800">1,240</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow-sm border-l-4 border-yellow-500">
+                            <span className="text-gray-500 text-sm font-medium">Leads Novos</span>
+                            <p className="text-2xl font-bold text-gray-800">34</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<MegaRoboWA />);
+    </script>
+</body>
+</html>
